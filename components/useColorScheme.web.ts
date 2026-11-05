@@ -1,8 +1,23 @@
-// NOTE: The default React Native styling doesn't support server rendering.
-// Server rendered styles should not change between the first render of the HTML
-// and the first render on the client. Typically, web developers will use CSS media queries
-// to render different styles on the client and server, these aren't directly supported in React Native
-// but can be achieved using a styling library like Nativewind.
-export function useColorScheme() {
-  return 'light';
+import { useEffect, useState } from 'react';
+import { useColorScheme as useSystemColorScheme } from 'react-native';
+
+import { useOptionalSettings } from '@/context/Settings';
+
+/**
+ * Same contract as the native hook. During static rendering the system scheme is unknown, so
+ * the first render is always light and the real value is applied after hydration.
+ */
+export function useColorScheme(): 'light' | 'dark' {
+  const [hydrated, setHydrated] = useState(false);
+  const system = useSystemColorScheme();
+  const preference = useOptionalSettings()?.settings.theme ?? 'auto';
+
+  useEffect(() => {
+    setHydrated(true);
+  }, []);
+
+  if (preference !== 'auto') {
+    return preference;
+  }
+  return hydrated && system === 'dark' ? 'dark' : 'light';
 }

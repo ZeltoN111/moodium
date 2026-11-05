@@ -1,12 +1,14 @@
 /**
- * Learn more about Light and Dark modes:
- * https://docs.expo.io/guides/color-schemes/
+ * Themed primitives. Text defaults to the Onest body family and maps fontWeight onto the
+ * matching font file (custom fonts ignore fontWeight on Android); styles that name their own
+ * fontFamily (display, mono) are left alone.
  */
-import { Text as DefaultText, View as DefaultView } from 'react-native';
+import { StyleSheet, Text as DefaultText, View as DefaultView } from 'react-native';
 
 import { useColorScheme } from './useColorScheme';
 
 import Colors from '@/constants/Colors';
+import { bodyFamily } from '@/constants/Fonts';
 
 type ThemeProps = {
   lightColor?: string;
@@ -33,8 +35,10 @@ export function useThemeColor(
 export function Text(props: TextProps) {
   const { style, lightColor, darkColor, ...otherProps } = props;
   const color = useThemeColor({ light: lightColor, dark: darkColor }, 'text');
+  const flat = StyleSheet.flatten(style) ?? {};
+  const font = flat.fontFamily ? null : { fontFamily: bodyFamily(flat.fontWeight), fontWeight: 'normal' as const };
 
-  return <DefaultText style={[{ color }, style]} {...otherProps} />;
+  return <DefaultText style={[{ color }, style, font]} {...otherProps} />;
 }
 
 export function View(props: ViewProps) {
