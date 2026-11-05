@@ -9,7 +9,7 @@ const DEFAULT_FACTORS = [
   { key: 'social', label: 'Social', icon: '👥' },
 ];
 
-const LATEST_VERSION = 2;
+const LATEST_VERSION = 3;
 
 export async function migrateDbIfNeeded(db: SQLiteDatabase) {
   const row = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
@@ -91,6 +91,18 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase) {
     `);
 
     version = 2;
+  }
+
+  if (version === 2) {
+    // Remembers deleted days until the cloud copy has been told, so deletions sync too.
+    await db.execAsync(`
+      CREATE TABLE tombstones (
+        date TEXT PRIMARY KEY,
+        deleted_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+
+    version = 3;
   }
 
   await db.execAsync(`PRAGMA user_version = ${version}`);

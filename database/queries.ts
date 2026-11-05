@@ -156,6 +156,7 @@ export async function saveEntry(db: SQLiteDatabase, draft: EntryDraft): Promise<
       draft.date
     );
     entryId = saved!.id;
+    await db.runAsync('DELETE FROM tombstones WHERE date = ?', draft.date);
 
     await db.runAsync('DELETE FROM entry_factors WHERE entry_id = ?', entryId);
     for (const factorId of draft.factorIds) {
@@ -178,7 +179,32 @@ export async function saveEntry(db: SQLiteDatabase, draft: EntryDraft): Promise<
 }
 
 export async function deleteEntry(db: SQLiteDatabase, id: number) {
-  await db.runAsync('DELETE FROM entries WHERE id = ?', id);
+  await db.withTransactionAsync(async () => {
+    await db.runAsync('INSERT OR REPLACE INTO tombstones (date) SELECT date FROM entries WHERE id = ?', id);
+    await db.runAsync('DELETE FROM entries WHERE id = ?', id);
+  });
+}
+
+export type Tombstone = { date: string; deleted_at: string };
+
+export function getTombstones(db: SQLiteDatabase) {
+  return db.getAllAsync<Tombstone>('SELECT date, deleted_at FROM tombstones');
+}
+
+export async function clearTombstones(db: SQLiteDatabase, dates: string[]) {
+  for (const date of dates) {
+    await db.runAsync('DELETE FROM tombstones WHERE date = ?', date);
+  }
+}
+
+/** Removes a day because the cloud says it was deleted elsewhere — no tombstone, nothing to report back. */
+export async function deleteEntryByDate(db: SQLiteDatabase, date: string) {
+  await db.runAsync('DELETE FROM entries WHERE date = ?', date);
+}
+
+/** Stamps a day with the cloud's timestamp so a pull does not look like a fresh local edit. */
+export async function setEntryUpdatedAt(db: SQLiteDatabase, date: string, updatedAt: string) {
+  await db.runAsync('UPDATE entries SET updated_at = ? WHERE date = ?', updatedAt, date);
 }
 
 /** All entries from `from` (inclusive) on, with factor keys and tags attached, oldest first. */
@@ -241,8 +267,18 @@ export async function getAllSettings(db: SQLiteDatabase): Promise<Record<string,
 /** Wipes every journal entry (and orphaned tags); settings and factors stay. */
 export async function deleteAllEntries(db: SQLiteDatabase) {
   await db.withTransactionAsync(async () => {
+    await db.runAsync('INSERT OR REPLACE INTO tombstones (date) SELECT date FROM entries');
     await db.runAsync('DELETE FROM entries');
     await db.runAsync('DELETE FROM tags');
+  });
+}
+
+/** Clears the journal from this device only (after it was uploaded) — no tombstones, the cloud copy stays. */
+export async function wipeLocalJournal(db: SQLiteDatabase) {
+  await db.withTransactionAsync(async () => {
+    await db.runAsync('DELETE FROM entries');
+    await db.runAsync('DELETE FROM tags');
+    await db.runAsync('DELETE FROM tombstones');
   });
 }
 
