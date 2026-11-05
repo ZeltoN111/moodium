@@ -1,0 +1,207 @@
+diff --git a/node_modules/expo-sqlite/web/wa-sqlite/AccessHandlePoolVFS.js b/node_modules/expo-sqlite/web/wa-sqlite/AccessHandlePoolVFS.js
+index 046fe6f..8ef927d 100644
+--- a/node_modules/expo-sqlite/web/wa-sqlite/AccessHandlePoolVFS.js
++++ b/node_modules/expo-sqlite/web/wa-sqlite/AccessHandlePoolVFS.js
+@@ -24,6 +24,18 @@ const PERSISTENT_FILE_TYPES =
+ 
+ const DEFAULT_CAPACITY = 6;
+ 
++// Moodium patch: a handle another tab just closed can take a moment to become available again.
++async function createAccessHandle(fileHandle) {
++  for (let attempt = 0; ; attempt++) {
++    try {
++      return await fileHandle.createSyncAccessHandle();
++    } catch (e) {
++      if (e?.name !== 'NoModificationAllowedError' || attempt >= 100) throw e;
++      await new Promise((resolve) => setTimeout(resolve, 25));
++    }
++  }
++}
++
+ /**
+  * This VFS uses the updated Access Handle API with all synchronous methods
+  * on FileSystemSyncAccessHandle (instead of just read and write). It will
+@@ -51,6 +63,11 @@ export class AccessHandlePoolVFS extends FacadeVFS {
+ 
+   #mapIdToFile = new Map();
+ 
++  // Moodium patch: the handles are only held while a database operation is in flight, and a Web
++  // Lock serializes that between tabs, so several tabs can share one database.
++  #lockRelease = null;
++  #acquiring = null;
++
+   static async create(name, module) {
+     const vfs = new AccessHandlePoolVFS(name, module);
+     await vfs.isReady();
+@@ -211,6 +228,43 @@ export class AccessHandlePoolVFS extends FacadeVFS {
+     return VFS.SQLITE_OK;
+   }
+ 
++  async #takeLock() {
++    if (this.#lockRelease) return;
++    await new Promise((resolve) => {
++      navigator.locks.request('moodium-sqlite-handles', () => new Promise((release) => {
++        this.#lockRelease = release;
++        resolve();
++      }));
++    });
++  }
++
++  /** Waits for the other tabs to let go of the database files, then opens them. */
++  acquireShared() {
++    // Concurrent requests share one acquisition instead of queueing behind their own lock.
++    this.#acquiring ??= (async () => {
++      if (this.#lockRelease) return;
++      await this.#takeLock();
++      await this.#acquireAccessHandles();
++      // Files SQLite already has open (main db, wal) must point at the fresh handles.
++      for (const file of this.#mapIdToFile.values()) {
++        const handle = this.#mapPathToAccessHandle.get(file.path);
++        if (handle) file.accessHandle = handle;
++      }
++    })().finally(() => {
++      this.#acquiring = null;
++    });
++    return this.#acquiring;
++  }
++
++  /** Closes the files so another tab can take its turn. */
++  releaseShared() {
++    if (!this.#lockRelease) return;
++    this.#releaseAccessHandles();
++    const release = this.#lockRelease;
++    this.#lockRelease = null;
++    release();
++  }
++
+   async close() {
+     await this.#releaseAccessHandles();
+   }
+@@ -229,6 +283,7 @@ export class AccessHandlePoolVFS extends FacadeVFS {
+       }
+       this.#directoryHandle = handle;
+ 
++      await this.#takeLock();
+       await this.#acquireAccessHandles();
+       if (this.getCapacity() === 0) {
+         await this.addCapacity(DEFAULT_CAPACITY);
+@@ -262,7 +317,7 @@ export class AccessHandlePoolVFS extends FacadeVFS {
+     for (let i = 0; i < n; ++i) {
+       const name = Math.random().toString(36).replace('0.', '');
+       const handle = await this.#directoryHandle.getFileHandle(name, { create: true });
+-      const accessHandle = await handle.createSyncAccessHandle();
++      const accessHandle = await createAccessHandle(handle);
+       this.#mapAccessHandleToName.set(accessHandle, name);
+ 
+       this.#setAssociatedPath(accessHandle, '', 0);
+@@ -304,7 +359,7 @@ export class AccessHandlePoolVFS extends FacadeVFS {
+     // Open access handles in parallel, separating associated and unassociated.
+     await Promise.all(
+       files.map(async ([name, handle]) => {
+-        const accessHandle = await handle.createSyncAccessHandle();
++        const accessHandle = await createAccessHandle(handle);
+         this.#mapAccessHandleToName.set(accessHandle, name);
+         const path = this.#getAssociatedPath(accessHandle);
+         if (path) {
+diff --git a/node_modules/expo-sqlite/web/worker.ts b/node_modules/expo-sqlite/web/worker.ts
+index deaf721..66d0d42 100644
+--- a/node_modules/expo-sqlite/web/worker.ts
++++ b/node_modules/expo-sqlite/web/worker.ts
+@@ -61,12 +61,43 @@ const sessionIdMap = new Map<number, SessionEntity>();
+ 
+ class SQLiteErrorException extends Error {}
+ 
++// Moodium patch: the OPFS files are only held while a request is running (and while a transaction
++// or a stepping statement is open), so several tabs can share one database.
++let activeRequests = 0;
++const steppingStatements = new Set<number>();
++
++async function beginRequest() {
++  activeRequests++;
++  try {
++    const { vfs } = await maybeInitAsync();
++    await vfs.acquireShared();
++  } catch (e) {
++    activeRequests--;
++    throw e;
++  }
++}
++
++function endRequest() {
++  activeRequests--;
++  if (activeRequests > 0 || steppingStatements.size > 0 || !_vfs || !_sqlite3) return;
++  const sqlite3 = _sqlite3;
++  for (const entity of databaseIdMap.values()) {
++    if (sqlite3.get_autocommit(entity.pointer) === 0) return;
++  }
++  _vfs.releaseShared();
++}
++
+ self.onmessage = async (event: MessageEvent<SQLiteWorkerMessage>) => {
+   let result: ResultType | null = null;
+   let error: Error | null = null;
+   try {
+     const message = event.data as MessageTypeMap[typeof event.data.type];
+-    result = await handleMessageImpl(message);
++    await beginRequest();
++    try {
++      result = await handleMessageImpl(message);
++    } finally {
++      endRequest();
++    }
+   } catch (e) {
+     error = e instanceof Error ? e : new Error(String(e));
+   }
+@@ -296,6 +327,7 @@ async function finalize(nativeDatabaseId: number, nativeStatementId: number): Pr
+   const stmt = statementIdMap.get(nativeStatementId);
+   if (!stmt) throw new Error(`Statement not found - nativeStatementId[${nativeStatementId}]`);
+ 
++  steppingStatements.delete(nativeStatementId);
+   statementIdMap.delete(nativeStatementId);
+   if ((await sqlite3.finalize(stmt.pointer)) !== SQLITE_OK) {
+     throw new Error('Error finalizing statement');
+@@ -323,6 +355,7 @@ async function getAllRows(
+     }
+     throw new Error('Error executing statement');
+   }
++  steppingStatements.delete(nativeStatementId);
+   return rows;
+ }
+ 
+@@ -465,6 +498,9 @@ async function run(
+     throw new SQLiteErrorException('Error executing statement');
+   }
+ 
++  if (ret === SQLITE_ROW) steppingStatements.add(nativeStatementId);
++  else steppingStatements.delete(nativeStatementId);
++
+   const firstRowValues = ret === SQLITE_ROW ? getColumnValues(sqlite3, stmt.pointer) : [];
+   return {
+     lastInsertRowId: Number(sqlite3.last_insert_rowid(dbEntity.pointer)),
+@@ -480,6 +516,7 @@ async function reset(nativeDatabaseId: number, nativeStatementId: number): Promi
+   const stmt = statementIdMap.get(nativeStatementId);
+   if (!stmt) throw new Error(`Statement not found - nativeStatementId[${nativeStatementId}]`);
+ 
++  steppingStatements.delete(nativeStatementId);
+   if ((await sqlite3.reset(stmt.pointer)) !== SQLITE_OK) {
+     throw new Error('Error resetting statement');
+   }
+@@ -507,8 +544,10 @@ async function step(
+ 
+   const ret = await sqlite3.step(stmt.pointer);
+   if (ret === SQLITE_ROW) {
++    steppingStatements.add(nativeStatementId);
+     return getColumnValues(sqlite3, stmt.pointer);
+   }
++  steppingStatements.delete(nativeStatementId);
+   if (ret !== SQLITE_DONE) {
+     throw new Error('Error executing statement');
+   }
+@@ -791,6 +830,7 @@ async function maybeInitAsync(): Promise<{
+       if (_vfs == null) {
+         throw new Error('Failed to initialize AccessHandlePoolVFS');
+       }
++      _vfs.releaseShared();
+     }
+     _sqlite3.vfs_register(_vfs, true);
+ 
