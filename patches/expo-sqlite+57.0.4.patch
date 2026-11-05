@@ -104,7 +104,7 @@ index 046fe6f..8ef927d 100644
          const path = this.#getAssociatedPath(accessHandle);
          if (path) {
 diff --git a/node_modules/expo-sqlite/web/worker.ts b/node_modules/expo-sqlite/web/worker.ts
-index deaf721..66d0d42 100644
+index deaf721..c168de3 100644
 --- a/node_modules/expo-sqlite/web/worker.ts
 +++ b/node_modules/expo-sqlite/web/worker.ts
 @@ -61,12 +61,43 @@ const sessionIdMap = new Map<number, SessionEntity>();
@@ -197,7 +197,39 @@ index deaf721..66d0d42 100644
    if (ret !== SQLITE_DONE) {
      throw new Error('Error executing statement');
    }
-@@ -791,6 +830,7 @@ async function maybeInitAsync(): Promise<{
+@@ -772,11 +811,29 @@ async function maybeFinalizeAllStatements(nativeDatabaseId: number) {
+   if (error) throw error;
+ }
+ 
+-async function maybeInitAsync(): Promise<{
++type InitResult = {
+   sqlite3: SQLiteAPI;
+   vfs: AccessHandlePoolVFS;
+   vfsMemory: MemoryVFS;
+-}> {
++};
++
++// Moodium patch: initialisation can take a while (the VFS waits for another tab to let go of the
++// database files). Requests arriving meanwhile must wait for it instead of seeing a half-built state
++// and failing with "Invalid VFS state".
++let _initPromise: Promise<InitResult> | null = null;
++
++function maybeInitAsync(): Promise<InitResult> {
++  _initPromise ??= initImpl().catch((e) => {
++    _initPromise = null;
++    _sqlite3 = null;
++    _vfs = null;
++    _vfsMemory = null;
++    throw e;
++  });
++  return _initPromise;
++}
++
++async function initImpl(): Promise<InitResult> {
+   if (!_sqlite3) {
+     const module = await WaSQLiteFactory({
+       locateFile: () => wasmModule,
+@@ -791,6 +848,7 @@ async function maybeInitAsync(): Promise<{
        if (_vfs == null) {
          throw new Error('Failed to initialize AccessHandlePoolVFS');
        }
