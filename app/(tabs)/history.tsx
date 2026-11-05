@@ -13,6 +13,7 @@ import { Text, useThemeColor } from '@/components/Themed';
 import { FONTS } from '@/constants/Fonts';
 import { usePalette } from '@/constants/Palette';
 import { useSettings } from '@/context/Settings';
+import { useSync } from '@/context/Sync';
 import { getEntriesInRange, listEntries } from '@/database/queries';
 import type { EntryListItem } from '@/database/queries';
 import type { Entry } from '@/database/types';
@@ -23,6 +24,7 @@ export default function HistoryScreen() {
   const db = useSQLiteContext();
   const router = useRouter();
   const { t, locale } = useSettings();
+  const { version: syncVersion } = useSync();
   const now = new Date();
 
   const [year, setYear] = useState(now.getFullYear());
@@ -53,7 +55,7 @@ export default function HistoryScreen() {
   useFocusEffect(
     useCallback(() => {
       load();
-    }, [load])
+    }, [load, syncVersion])
   );
 
   function shiftMonth(delta: number) {

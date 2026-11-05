@@ -30,6 +30,7 @@ import { FONTS, LABEL } from '@/constants/Fonts';
 import { MOTION } from '@/constants/Motion';
 import { usePalette } from '@/constants/Palette';
 import { useSettings } from '@/context/Settings';
+import { useSync } from '@/context/Sync';
 import { deleteEntry, getEntriesInRange, getEntryByDate, getFactors, saveEntry } from '@/database/queries';
 import type { EntryWithRelations } from '@/database/queries';
 import type { Factor } from '@/database/types';
@@ -46,6 +47,7 @@ const TRACE_DAYS = 14;
 export default function TodayScreen() {
   const db = useSQLiteContext();
   const { settings, update, t, locale } = useSettings();
+  const { requestSync, version: syncVersion } = useSync();
   const params = useLocalSearchParams<{ date?: string; ts?: string }>();
   const today = todayKey();
 
@@ -99,7 +101,7 @@ export default function TodayScreen() {
     return () => {
       cancelled = true;
     };
-  }, [db, date]);
+  }, [db, date, syncVersion]);
 
   function applyEntry(existing: EntryWithRelations | null) {
     setEntry(existing);
@@ -115,7 +117,7 @@ export default function TodayScreen() {
   }
 
   async function handleSave() {
-    if (mood === null) {
+    if (mood === null || missing.length > 0) {
       return;
     }
     setSaving(true);
@@ -140,6 +142,7 @@ export default function TodayScreen() {
     savedTimer.current = setTimeout(() => setJustSaved(false), 1800);
 
     maybeSendBurnoutAlert(db, settings, update, t).catch(() => {});
+    requestSync();
   }
 
   function handleDelete() {
@@ -154,6 +157,7 @@ export default function TodayScreen() {
         onPress: async () => {
           await deleteEntry(db, entry.id);
           applyEntry(null);
+          requestSync();
         },
       },
     ]);
@@ -185,6 +189,14 @@ export default function TodayScreen() {
       </View>
     );
   }
+
+  // The index needs all four measurements, so a day cannot be saved with any of them empty.
+  const missing = [
+    mood === null && t('sectionMood'),
+    sleepHours === null && t('sectionSleep'),
+    stress === null && t('sectionStress'),
+    workload === null && t('sectionWorkload'),
+  ].filter((label): label is string => Boolean(label));
 
   const saveLabel = justSaved ? t('saved') : entry ? t('updateEntry') : t('saveEntry');
 
@@ -339,10 +351,15 @@ export default function TodayScreen() {
           </Tile>
 
           <RNView style={styles.actions}>
+            {missing.length > 0 && (
+              <Text style={[styles.missing, { color: muted }]}>
+                {t('saveMissing', { fields: missing.join(', ') })}
+              </Text>
+            )}
             <SaveButton
               label={saveLabel.replace(' ✓', '')}
               saved={justSaved}
-              disabled={mood === null || saving}
+              disabled={missing.length > 0 || saving}
               onPress={handleSave}
               tint={tint}
               onTint={onTint}
@@ -436,6 +453,7 @@ const styles = StyleSheet.create({
     shadowRadius: 24,
     shadowOffset: { width: 0, height: 10 },
   },
+  missing: { fontSize: 13, lineHeight: 19, textAlign: 'center', marginBottom: 12 },
   saveLabel: { fontFamily: FONTS.displayMedium, fontSize: 15 },
   deleteButton: {
     flexDirection: 'row',

@@ -6,7 +6,6 @@ import Svg, { Circle, Line, Path } from 'react-native-svg';
 
 import { Text, useThemeColor } from '@/components/Themed';
 import { LABEL } from '@/constants/Fonts';
-import { usePalette } from '@/constants/Palette';
 import { useT } from '@/context/Settings';
 import { moodPoints, polylineLength, smoothPath } from '@/utils/path';
 import type { Point } from '@/utils/path';
@@ -36,7 +35,6 @@ export default function MoodSignal({ values }: Props) {
   const border = useThemeColor({}, 'border');
   const background = useThemeColor({}, 'background');
   const muted = useThemeColor({}, 'muted');
-  const palette = usePalette();
   const reduced = useReducedMotion();
   const { t } = useT();
   const [width, setWidth] = useState(0);
@@ -47,7 +45,6 @@ export default function MoodSignal({ values }: Props) {
   const d = smoothPath(points);
   const length = Math.max(1, polylineLength(points) * 1.08);
   const last = points[points.length - 1];
-  const todayLogged = values[values.length - 1] !== null;
   const signature = values.join(',');
 
   useEffect(() => {
@@ -62,7 +59,6 @@ export default function MoodSignal({ values }: Props) {
     <View style={styles.wrap}>
       <View style={styles.labels}>
         <Text style={[LABEL, { color: muted }]}>{t('signalTrace')}</Text>
-        {todayLogged && <Text style={[LABEL, { color: palette.risk.low }]}>● {t('signalLive')}</Text>}
       </View>
       <View
         style={[styles.field, { borderColor: border }]}

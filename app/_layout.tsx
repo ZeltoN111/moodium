@@ -8,11 +8,14 @@ import { Platform } from "react-native";
 import "react-native-reanimated";
 
 import AppLock from "@/components/AppLock";
+import AuthGate from "@/components/AuthGate";
 import { useColorScheme } from "@/components/useColorScheme";
 import Colors from "@/constants/Colors";
 import { FONT_FILES, FONTS } from "@/constants/Fonts";
-import { SettingsProvider, useT } from "@/context/Settings";
+import { SettingsProvider, useSettings, useT } from "@/context/Settings";
+import { SyncProvider } from "@/context/Sync";
 import { DATABASE_NAME, migrateDbIfNeeded } from "@/database/schema";
+import { syncDailyReminder } from "@/services/notifications";
 import { installWebAlert } from "@/services/webAlert";
 
 export const unstable_settings = {
@@ -64,7 +67,9 @@ function RootLayoutNav() {
   return (
     <SQLiteProvider databaseName={DATABASE_NAME} onInit={migrateDbIfNeeded}>
       <SettingsProvider>
-        <ThemedApp />
+        <SyncProvider>
+          <ThemedApp />
+        </SyncProvider>
       </SettingsProvider>
     </SQLiteProvider>
   );
@@ -73,6 +78,16 @@ function RootLayoutNav() {
 /** Lives inside SettingsProvider so the navigation theme follows the user's theme choice. */
 function ThemedApp() {
   const colorScheme = useColorScheme();
+  const { settings, t } = useSettings();
+
+  // Native reminders are scheduled with the OS and survive restarts; the browser's live in a timer
+  // that must be started again on every page load.
+  useEffect(() => {
+    if (Platform.OS === "web") {
+      syncDailyReminder(settings.reminderEnabled, settings.reminderHour, settings.reminderMinute, t);
+    }
+  }, [settings.reminderEnabled, settings.reminderHour, settings.reminderMinute, t]);
+
   const colors = Colors[colorScheme];
   const base = colorScheme === "dark" ? DarkTheme : DefaultTheme;
 
@@ -90,9 +105,11 @@ function ThemedApp() {
 
   return (
     <ThemeProvider value={theme}>
-      <AppLock>
-        <AppStack />
-      </AppLock>
+      <AuthGate>
+        <AppLock>
+          <AppStack />
+        </AppLock>
+      </AuthGate>
       <StatusBar style={colorScheme === "dark" ? "light" : "dark"} />
     </ThemeProvider>
   );

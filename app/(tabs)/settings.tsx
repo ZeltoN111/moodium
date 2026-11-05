@@ -1,16 +1,18 @@
 import * as LocalAuthentication from 'expo-local-authentication';
 import { useSQLiteContext } from 'expo-sqlite';
 import { useState } from 'react';
-import { Alert, Pressable, StyleSheet, Switch, View } from 'react-native';
+import { Alert, Platform, Pressable, StyleSheet, Switch, View } from 'react-native';
 import type { ReactNode } from 'react';
 
-import { BentoGrid, Screen, Tile } from '@/components/Bento';
+import { BentoGrid, Screen, Tile, TileStack } from '@/components/Bento';
 import Icon from '@/components/Icon';
 import type { IconName } from '@/components/Icon';
 import Segmented from '@/components/Segmented';
-import Stepper from '@/components/Stepper';
+import TimePicker from '@/components/TimePicker';
 import { Text, useThemeColor } from '@/components/Themed';
+import AccountTile from '@/components/AccountTile';
 import { useSettings } from '@/context/Settings';
+import { useSync } from '@/context/Sync';
 import type { ThemeSetting } from '@/context/Settings';
 import { deleteAllEntries } from '@/database/queries';
 import { createTranslator, resolveLanguage } from '@/i18n';
@@ -19,7 +21,7 @@ import { maybeSendBurnoutAlert } from '@/services/alerts';
 import { shareReport } from '@/services/report';
 import { exportEntries, importEntries, loadDemoData } from '@/services/dataTransfer';
 import type { ExportFormat } from '@/services/dataTransfer';
-import { requestNotificationPermission, syncDailyReminder } from '@/services/notifications';
+import { requestNotificationPermission, sendTestNotification, syncDailyReminder } from '@/services/notifications';
 import { ImportError } from '@/utils/exchange';
 import { success, tap, warning } from '@/utils/haptics';
 
@@ -29,6 +31,7 @@ const pad = (value: number) => String(value).padStart(2, '0');
 export default function SettingsScreen() {
   const db = useSQLiteContext();
   const { settings, update, t, language, locale } = useSettings();
+  const { available: syncAvailable, requestSync } = useSync();
   const [busy, setBusy] = useState(false);
 
   const muted = useThemeColor({}, 'muted');
@@ -62,7 +65,7 @@ export default function SettingsScreen() {
 
   async function toggleReminder(enabled: boolean) {
     if (enabled && !(await requestNotificationPermission())) {
-      Alert.alert(t('permissionDenied'));
+      Alert.alert(Platform.OS === 'web' ? t('permissionDeniedWeb') : t('permissionDenied'));
       return;
     }
     await update({ reminderEnabled: enabled });
@@ -78,10 +81,26 @@ export default function SettingsScreen() {
 
   async function toggleAlerts(enabled: boolean) {
     if (enabled && !(await requestNotificationPermission())) {
-      Alert.alert(t('permissionDenied'));
+      Alert.alert(Platform.OS === 'web' ? t('permissionDeniedWeb') : t('permissionDenied'));
       return;
     }
     await update({ alertsEnabled: enabled, lastAlertDate: '' });
+  }
+
+  function handleTestNotification() {
+    run(async () => {
+      if (!(await requestNotificationPermission())) {
+        Alert.alert(Platform.OS === 'web' ? t('permissionDeniedWeb') : t('permissionDenied'));
+        return;
+      }
+      try {
+        if (!(await sendTestNotification(t))) {
+          Alert.alert(t('testNotifNotShown'));
+        }
+      } catch {
+        Alert.alert(Platform.OS === 'web' ? t('permissionDeniedWeb') : t('permissionDenied'));
+      }
+    });
   }
 
   async function toggleLock(enabled: boolean) {
@@ -136,6 +155,7 @@ export default function SettingsScreen() {
             t('importTitle'),
             t('importDone', { count: result.count, skipped: result.skipped })
           );
+          requestSync();
         }
       } catch (error) {
         warning();
@@ -149,6 +169,7 @@ export default function SettingsScreen() {
       const count = await loadDemoData(db, language);
       success();
       Alert.alert(t('demoData'), t('demoDone', { count }));
+      requestSync();
       maybeSendBurnoutAlert(db, settings, update, t).catch(() => {});
     });
   }
@@ -164,6 +185,7 @@ export default function SettingsScreen() {
             await deleteAllEntries(db);
             warning();
             Alert.alert(t('deleteAllDone'));
+            requestSync();
           }),
       },
     ]);
@@ -216,7 +238,10 @@ export default function SettingsScreen() {
         <Switch
           value={value}
           onValueChange={onChange}
-          trackColor={{ false: border, true: tint }}
+          trackColor={{ false: `${muted}55`, true: tint }}
+          thumbColor="#FFFFFF"
+          // react-native-web paints the "on" thumb teal unless told otherwise.
+          {...({ activeThumbColor: '#FFFFFF' } as object)}
           accessibilityLabel={label}
         />
       ),
@@ -238,51 +263,60 @@ export default function SettingsScreen() {
   return (
     <Screen glow={tint} eyebrow="Moodium" title={t('tabSettings')}>
       <BentoGrid>
+        <TileStack>
         <Tile title={t('settingsAppearance')}>
-          <Text style={styles.fieldLabel}>{t('theme')}</Text>
-          <Segmented
-            options={themeOptions}
-            value={settings.theme}
-            onChange={(theme) => update({ theme })}
-          />
-          <Text style={[styles.fieldLabel, styles.fieldGap]}>{t('language')}</Text>
-          <Segmented options={languageOptions} value={settings.language} onChange={changeLanguage} />
+          <View style={styles.fill}>
+            <View>
+              <Text style={styles.fieldLabel}>{t('theme')}</Text>
+              <Segmented
+                options={themeOptions}
+                value={settings.theme}
+                onChange={(theme) => update({ theme })}
+              />
+            </View>
+            <View>
+              <Text style={styles.fieldLabel}>{t('language')}</Text>
+              <Segmented options={languageOptions} value={settings.language} onChange={changeLanguage} />
+            </View>
+          </View>
         </Tile>
+
+        {syncAvailable && (
+          <Tile title={t('settingsAccount')} style={styles.grow}>
+            <AccountTile />
+          </Tile>
+        )}
+        </TileStack>
 
         <Tile title={t('settingsReminders')}>
           {switchRow('clock', t('dailyReminder'), settings.reminderEnabled, toggleReminder)}
           {settings.reminderEnabled && (
             <View style={styles.timeBox}>
               <Text style={[styles.fieldLabel, { color: muted }]}>{t('reminderTime')}</Text>
-              <View style={styles.timeRow}>
-                <View style={styles.timeCell}>
-                  <Stepper
-                    label={`${pad(settings.reminderHour)} ${t('hoursAbbr')}`}
-                    value={settings.reminderHour}
-                    onMinus={() => changeTime((settings.reminderHour + 23) % 24, settings.reminderMinute)}
-                    onPlus={() => changeTime((settings.reminderHour + 1) % 24, settings.reminderMinute)}
-                  />
-                </View>
-                <View style={styles.timeCell}>
-                  <Stepper
-                    label={`${pad(settings.reminderMinute)} ${t('minutesAbbr')}`}
-                    value={settings.reminderMinute}
-                    onMinus={() => changeTime(settings.reminderHour, (settings.reminderMinute + 45) % 60)}
-                    onPlus={() => changeTime(settings.reminderHour, (settings.reminderMinute + 15) % 60)}
-                  />
-                </View>
-              </View>
+              <TimePicker
+                hour={settings.reminderHour}
+                minute={settings.reminderMinute}
+                onChange={changeTime}
+                hoursLabel={t('hoursAbbr')}
+                minutesLabel={t('minutesAbbr')}
+              />
             </View>
           )}
           {divider}
           {switchRow('alert', t('burnoutAlerts'), settings.alertsEnabled, toggleAlerts, t('burnoutAlertsHint'))}
+          {divider}
+          {row('bell', t('testNotification'), { onPress: handleTestNotification, hint: t('testNotificationHint') })}
         </Tile>
 
-        <Tile title={t('settingsPrivacy')}>
-          {switchRow('shield', t('appLock'), settings.lockEnabled, toggleLock, t('appLockHint'))}
-        </Tile>
+        <TileStack span={[1, 2, 1]}>
+        {/* Biometrics do not exist in a desktop browser. */}
+        {Platform.OS !== 'web' && (
+          <Tile title={t('settingsPrivacy')}>
+            {switchRow('shield', t('appLock'), settings.lockEnabled, toggleLock, t('appLockHint'))}
+          </Tile>
+        )}
 
-        <Tile span={[1, 2, 3]} title={t('settingsData')}>
+        <Tile span={[1, 2, 1]} title={t('settingsData')} style={styles.grow}>
           <View style={styles.actions}>
             <View style={styles.actionCell}>
               {row('file', t('exportPdf'), { onPress: handleReport, hint: t('exportPdfHint') })}
@@ -296,12 +330,17 @@ export default function SettingsScreen() {
             </View>
           </View>
         </Tile>
+        </TileStack>
       </BentoGrid>
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
+  /** Last tile of a stack: takes the leftover height so the column ends level with its neighbours. */
+  grow: { flex: 1 },
+  // Cards in a row share one height; their content is spread top-to-bottom so nothing is left empty.
+  fill: { flex: 1, justifyContent: 'space-between', gap: 18 },
   fieldLabel: { fontSize: 13, fontWeight: '500', marginBottom: 10 },
   fieldGap: { marginTop: 18 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 14, minHeight: 56, paddingVertical: 6 },
@@ -311,8 +350,6 @@ const styles = StyleSheet.create({
   rowHint: { fontSize: 12, marginTop: 2, lineHeight: 17 },
   divider: { height: StyleSheet.hairlineWidth, marginVertical: 8 },
   timeBox: { marginTop: 8 },
-  timeRow: { flexDirection: 'row', gap: 12 },
-  timeCell: { flex: 1 },
   actions: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 32 },
   actionCell: { flexGrow: 1, flexBasis: 280 },
 });

@@ -241,6 +241,18 @@ export function Tile({
   );
 }
 
+/**
+ * Tiles stacked vertically inside one grid cell. Give the last tile `style={{ flex: 1 }}` and the
+ * stack's bottom edge lines up with its neighbours, so columns of different content still end together.
+ */
+export function TileStack({ children, span = 1 }: { children: ReactNode; span?: number | [number, number, number] }) {
+  const { width, columns } = useGrid();
+  const wanted = typeof span === 'number' ? span : span[columns - 1];
+  const used = Math.min(columns, wanted);
+  const tileWidth = (width - GAP * (columns - 1)) / columns;
+  return <View style={{ width: tileWidth * used + GAP * (used - 1), gap: GAP }}>{children}</View>;
+}
+
 /** A 44 px square outline button for headers (info, share, previous/next). */
 export function IconButton({
   icon,

@@ -17,6 +17,7 @@ import { Text, useThemeColor } from '@/components/Themed';
 import { FONTS, LABEL } from '@/constants/Fonts';
 import { usePalette } from '@/constants/Palette';
 import { useSettings } from '@/context/Settings';
+import { useSync } from '@/context/Sync';
 import { shareReport } from '@/services/report';
 import { getAnalyticsEntries, getFactors } from '@/database/queries';
 import type { TKey } from '@/i18n';
@@ -33,6 +34,7 @@ export default function InsightsScreen() {
   const db = useSQLiteContext();
   const router = useRouter();
   const { t, locale } = useSettings();
+  const { version: syncVersion } = useSync();
   const [sharing, setSharing] = useState(false);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const muted = useThemeColor({}, 'muted');
@@ -64,7 +66,7 @@ export default function InsightsScreen() {
       return () => {
         cancelled = true;
       };
-    }, [db])
+    }, [db, syncVersion])
   );
 
   async function handleShare() {
