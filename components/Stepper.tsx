@@ -33,7 +33,7 @@ export default function Stepper({ label, value, onMinus, onPlus, onClear, minusL
       accessibilityLabel={accessibilityLabel}
       hitSlop={6}
       style={({ pressed }) => [styles.button, { borderColor: border, opacity: pressed ? 0.6 : 1 }]}>
-      <Icon name={name} size={20} color={tint} strokeWidth={2.4} />
+      <Icon name={name} size={18} color={tint} strokeWidth={2.4} />
     </Pressable>
   );
 
@@ -53,8 +53,8 @@ export default function Stepper({ label, value, onMinus, onPlus, onClear, minusL
 }
 
 const styles = StyleSheet.create({
-  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
-  button: { width: 46, height: 46, borderRadius: 15, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  valueBox: { flex: 1, minWidth: 70, alignItems: 'center', paddingVertical: 8 },
-  value: { fontFamily: FONTS.mono, fontSize: 18, lineHeight: 24 },
+  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6 },
+  button: { flexShrink: 0, width: 40, height: 40, borderRadius: 13, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  valueBox: { flex: 1, minWidth: 0, alignItems: 'center', paddingVertical: 8 },
+  value: { fontFamily: FONTS.mono, fontSize: 16, lineHeight: 22 },
 });
