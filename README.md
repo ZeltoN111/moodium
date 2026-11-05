@@ -1,13 +1,58 @@
 # Moodium — трекер настрою з індексом вигорання
 
-Курсова робота з крос-платформного програмування. React Native + Expo (TypeScript), працює на iOS і Android (Expo Go), дані зберігаються локально в SQLite.
+Курсова робота з крос-платформного програмування. React Native + Expo (TypeScript), працює на iOS, Android (Expo Go) і в браузері. Записи зберігаються локально в SQLite і синхронізуються між пристроями через акаунт Supabase.
 
 ## Запуск
 
+### 1. Залежності
+
 ```bash
 npm install
-npx expo start      # QR-код → Expo Go
-npm test            # юніт-тести алгоритму
+```
+
+### 2. Supabase (акаунт і синхронізація)
+
+Застосунок відкривається після входу в акаунт, а записи синхронізуються через Supabase. Потрібен безкоштовний проєкт на [supabase.com](https://supabase.com).
+
+1. Створіть проєкт у Supabase.
+2. **SQL Editor → New query**: вставте вміст файлу [`supabase/schema.sql`](supabase/schema.sql) і натисніть **Run**. Він створює таблицю `entries` з правилами доступу (Row Level Security): кожен користувач бачить лише свої записи.
+3. **Project Settings → API**: скопіюйте *Project URL* і *Publishable key* (`sb_publishable_…`). **Secret key не використовуйте і нікому не показуйте.**
+4. Створіть файл `.env` за зразком [`.env.example`](.env.example):
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   і впишіть свої значення:
+
+   ```text
+   EXPO_PUBLIC_SUPABASE_URL=https://<id-проєкту>.supabase.co
+   EXPO_PUBLIC_SUPABASE_KEY=sb_publishable_...
+   ```
+
+5. (Необов'язково, для розробки) **Authentication → Sign In / Providers → Email**: вимкніть *Confirm email*, щоб реєстрація не вимагала листа. Якщо залишити, після реєстрації застосунок покаже сторінку «Підтвердьте email» і впустить, щойно ви перейдете за посиланням. Для цього адресу веб-версії (наприклад `http://localhost:8081`) додайте в **Authentication → URL Configuration** (Site URL і Redirect URLs).
+
+6. Готові красиві шаблони листів лежать у [`supabase/templates/`](supabase/templates): `reset-password.html` (**Authentication → Emails → Reset password**) і `confirm-signup.html` (**Confirm sign up**). Редагувати шаблони можна лише після підключення власного SMTP. Для функції «Забули пароль?»: **Authentication → Emails → Reset password** — у тексті листа має бути код `{{ .Token }}`, наприклад:
+
+   ```html
+   <h2>Скидання пароля Moodium</h2>
+   <p>Ваш код: <strong>{{ .Token }}</strong></p>
+   ```
+
+   Без цього лист міститиме лише посилання, а застосунок чекає саме код. Довжина коду в застосунку 8 цифр, тож у Supabase (**Authentication → Sign In / Providers → Email → Email OTP Length**) має бути 8; якщо там інше значення, задайте таке саме в `.env`: `EXPO_PUBLIC_OTP_LENGTH=6`. Вбудована розсилка Supabase має жорсткий ліміт листів на годину, для реального використання підключіть власний SMTP (**Authentication → Emails → SMTP Settings**).
+
+Без `.env` застосунок запускається в локальному режимі: без входу й без синхронізації.
+
+### 3. Старт
+
+```bash
+npx expo start -c   # -c очищає кеш, потрібно після зміни .env
+```
+
+У терміналі: **w** — браузер, або QR-код → Expo Go на телефоні. Змінні з `.env` зчитуються лише при старті, тож після їх зміни Expo треба перезапускати.
+
+```bash
+npm test            # юніт-тести (логіка, алгоритм синхронізації)
 ```
 
 ## Вкладки
@@ -17,7 +62,7 @@ npm test            # юніт-тести алгоритму
 | **Today / Сьогодні** | Настрій, інтенсивність, сон (год), стрес, навантаження, фактори, нотатка, теги. Можна переходити на минулі дні й редагувати їх. |
 | **History / Історія** | Календар-теплокарта місяця, графік настрою, пошук і фільтр за настроєм. Натискання на запис відкриває його для редагування. |
 | **Insights / Аналітика** | Індекс вигорання 0–100, причини та **конкретні наступні кроки**, **прогноз** індексу, **підсумок тижня**, розбивка за сигналами (що виміряно і скільки балів додає), вплив факторів, теги, серія днів, зв’язок сну й настрою, **PDF-звіт**. |
-| **Settings / Налаштування** | Тема (світла/темна/авто), мова (укр/англ/авто), щоденне нагадування, попередження про вигорання, блокування біометрією, експорт PDF/JSON/CSV, імпорт JSON, демо-дані, очищення. |
+| **Settings / Налаштування** | Тема (світла/темна/авто), мова (укр/англ/авто), щоденне нагадування й тестове сповіщення, попередження про вигорання, акаунт і синхронізація (ім'я, вихід), блокування біометрією (лише телефон), експорт PDF/JSON/CSV, імпорт JSON, демо-дані, очищення. |
 
 ## Дизайн і адаптивність
 
@@ -47,12 +92,14 @@ npm test            # юніт-тести алгоритму
 
 ```text
 app/            Expo Router: (tabs)/{index,history,insights,settings}, about, _layout
-components/     UI: Bento (сітка/плитки), Icon (SVG), пікери, календар, графіки, BurnoutGauge, AppLock…
-context/        SettingsProvider (мова, нагадування, блокування) + useT()
-database/       схема з міграціями (user_version, зараз v2), запити, типи
+components/     UI: Bento (сітка/плитки), Icon (SVG), пікери, календар, графіки, BurnoutGauge, AppLock, AuthGate/AuthForm…
+context/        SettingsProvider (мова, нагадування, блокування) + useT(); SyncProvider (сесія, синхронізація)
+database/       схема з міграціями (user_version, зараз v3), запити, типи
 i18n/           словники uk / en
-services/       сповіщення, попередження про вигорання, експорт/імпорт
-utils/          burnout, sentiment, insights, exchange (CSV/JSON), demo, date
+services/       Supabase-клієнт і синхронізація, сповіщення, попередження про вигорання, експорт/імпорт, PDF-звіт
+supabase/       schema.sql — таблиця й правила доступу для Supabase
+public/         веб-маніфест (PWA) та іконки
+utils/          burnout, sentiment, insights, syncPlan (злиття), exchange (CSV/JSON), demo, date
 __tests__/      Jest-тести чистої логіки
 ```
 
@@ -60,6 +107,10 @@ __tests__/      Jest-тести чистої логіки
 
 ## Нативні можливості
 
-SQLite (`expo-sqlite`), локальні сповіщення (`expo-notifications`), біометрія (`expo-local-authentication`), файли й поширення (`expo-file-system`, `expo-sharing`, `expo-document-picker`), хаптик (`expo-haptics`), анімації (`react-native-reanimated`).
+SQLite (`expo-sqlite`), акаунт і синхронізація (`@supabase/supabase-js`), локальні сповіщення (`expo-notifications`), біометрія (`expo-local-authentication`), файли й поширення (`expo-file-system`, `expo-sharing`, `expo-document-picker`), хаптик (`expo-haptics`), анімації (`react-native-reanimated`).
 
-> Moodium — навчальний проєкт, а не медичний засіб.
+## Веб-версія (ноутбук)
+
+Працює так само, як на телефоні, з відмінностями, які диктує браузер: PDF-звіт друкується через діалог «Зберегти як PDF»; експорт — завантаження файлу; сповіщення приходять, поки вкладка відкрита; біометрії немає. Деталі — у `docs/PROJECT_REPORT.md`.
+
+> Moodium — навчальний проєкт, а не медичний засіб. Якщо вам важко, зверніться до фахівця; у кризовій ситуації телефонуйте 112 або на лінію Lifeline Ukraine — 7333.
